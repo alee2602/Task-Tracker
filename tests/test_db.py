@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from tasktracker.db import (
+    HasSubtasksError,
     add_tag_to_task,
     add_task,
     delete_task,
@@ -126,3 +127,138 @@ def test_deleting_task_cleans_up_tag_links(tmp_path: Path):
     # La etiqueta "casa" sigue existiendo para otras tareas, pero el link se limpió.
     other_id = add_task("Otra tarea", tags=["casa"], db_path=db_path)
     assert list_tasks(db_path=db_path)[0].id == other_id
+
+
+def test_create_subtask_with_parent(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    parent_id = add_task("Organizar viaje", db_path=db_path)
+
+    child_id = add_task("Comprar boletos", db_path=db_path, parent_id=parent_id)
+
+    tasks = {t.id: t for t in list_tasks(db_path=db_path)}
+    assert tasks[child_id].parent_id == parent_id
+    assert tasks[parent_id].parent_id is None
+
+
+def test_unlimited_nesting(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    grandparent_id = add_task("Nivel 0", db_path=db_path)
+    parent_id = add_task("Nivel 1", db_path=db_path, parent_id=grandparent_id)
+    child_id = add_task("Nivel 2", db_path=db_path, parent_id=parent_id)
+
+    tasks = {t.id: t for t in list_tasks(db_path=db_path)}
+    assert tasks[child_id].parent_id == parent_id
+    assert tasks[parent_id].parent_id == grandparent_id
+
+
+def test_add_task_with_nonexistent_parent_raises(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+
+    with pytest.raises(ValueError):
+        add_task("Huerfana", db_path=db_path, parent_id=999)
+
+
+def test_completing_all_subtasks_autocompletes_parent(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    parent_id = add_task("Organizar viaje", db_path=db_path)
+    child1 = add_task("Comprar boletos", db_path=db_path, parent_id=parent_id)
+    child2 = add_task("Reservar hotel", db_path=db_path, parent_id=parent_id)
+
+    mark_done(child1, db_path)
+    tasks = {t.id: t for t in list_tasks(include_done=True, db_path=db_path)}
+    assert tasks[parent_id].done is False  # aun falta child2
+
+    mark_done(child2, db_path)
+    tasks = {t.id: t for t in list_tasks(include_done=True, db_path=db_path)}
+    assert tasks[parent_id].done is True
+
+
+def test_autocomplete_propagates_two_levels_up(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    grandparent_id = add_task("Nivel 0", db_path=db_path)
+    parent_id = add_task("Nivel 1", db_path=db_path, parent_id=grandparent_id)
+    child_id = add_task("Nivel 2", db_path=db_path, parent_id=parent_id)
+
+    mark_done(child_id, db_path)
+
+    tasks = {t.id: t for t in list_tasks(include_done=True, db_path=db_path)}
+    assert tasks[parent_id].done is True
+    assert tasks[grandparent_id].done is True
+
+
+def test_adding_subtask_reopens_completed_parent(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    parent_id = add_task("Organizar viaje", db_path=db_path)
+    child1 = add_task("Comprar boletos", db_path=db_path, parent_id=parent_id)
+    mark_done(child1, db_path)
+
+    tasks = {t.id: t for t in list_tasks(include_done=True, db_path=db_path)}
+    assert tasks[parent_id].done is True  # se autocompleto con una sola subtarea
+
+    add_task("Reservar hotel", db_path=db_path, parent_id=parent_id)
+
+    tasks = {t.id: t for t in list_tasks(include_done=True, db_path=db_path)}
+    assert tasks[parent_id].done is False
+
+
+def test_reopen_propagates_two_levels_up(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    grandparent_id = add_task("Nivel 0", db_path=db_path)
+    parent_id = add_task("Nivel 1", db_path=db_path, parent_id=grandparent_id)
+    child_id = add_task("Nivel 2", db_path=db_path, parent_id=parent_id)
+    mark_done(child_id, db_path)
+
+    tasks = {t.id: t for t in list_tasks(include_done=True, db_path=db_path)}
+    assert tasks[grandparent_id].done is True
+
+    add_task("Otro nivel 2", db_path=db_path, parent_id=parent_id)
+
+    tasks = {t.id: t for t in list_tasks(include_done=True, db_path=db_path)}
+    assert tasks[parent_id].done is False
+    assert tasks[grandparent_id].done is False
+
+
+def test_delete_without_cascade_raises_when_has_subtasks(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    parent_id = add_task("Organizar viaje", db_path=db_path)
+    add_task("Comprar boletos", db_path=db_path, parent_id=parent_id)
+
+    with pytest.raises(HasSubtasksError):
+        delete_task(parent_id, db_path)
+
+
+def test_delete_with_cascade_removes_whole_subtree(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    parent_id = add_task("Organizar viaje", db_path=db_path)
+    child_id = add_task("Comprar boletos", db_path=db_path, parent_id=parent_id)
+    grandchild_id = add_task("Elegir asiento", db_path=db_path, parent_id=child_id)
+
+    assert delete_task(parent_id, db_path, cascade=True) is True
+
+    remaining_ids = {t.id for t in list_tasks(include_done=True, db_path=db_path)}
+    assert parent_id not in remaining_ids
+    assert child_id not in remaining_ids
+    assert grandchild_id not in remaining_ids
+
+
+def test_deleting_last_pending_subtask_autocompletes_parent(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    parent_id = add_task("Organizar viaje", db_path=db_path)
+    child1 = add_task("Comprar boletos", db_path=db_path, parent_id=parent_id)
+    child2 = add_task("Reservar hotel", db_path=db_path, parent_id=parent_id)
+    mark_done(child1, db_path)
+
+    assert delete_task(child2, db_path) is True
+
+    tasks = {t.id: t for t in list_tasks(include_done=True, db_path=db_path)}
+    assert tasks[parent_id].done is True

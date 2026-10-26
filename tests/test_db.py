@@ -316,3 +316,36 @@ def test_subtask_has_independent_due_date(tmp_path: Path):
     tasks = {t.id: t for t in list_tasks(db_path=db_path)}
     assert tasks[parent_id].due_date == "2026-06-01"
     assert tasks[child_id].due_date == "2026-05-01"
+
+
+def test_priority_filter(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    add_task("Alta", priority="alta", db_path=db_path)
+    add_task("Media", priority="media", db_path=db_path)
+    add_task("Otra alta", priority="alta", db_path=db_path)
+
+    filtered = list_tasks(db_path=db_path, priority_filter="alta")
+    assert {t.description for t in filtered} == {"Alta", "Otra alta"}
+
+
+def test_priority_filter_combines_with_tag_filter(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    add_task("Alta casa", priority="alta", tags=["casa"], db_path=db_path)
+    add_task("Alta trabajo", priority="alta", tags=["trabajo"], db_path=db_path)
+    add_task("Media casa", priority="media", tags=["casa"], db_path=db_path)
+
+    filtered = list_tasks(db_path=db_path, priority_filter="alta", tag_filter="casa")
+    assert [t.description for t in filtered] == ["Alta casa"]
+
+
+def test_priority_filter_combines_with_overdue_only(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    add_task("Alta vencida", priority="alta", due_date="2000-01-01", db_path=db_path)
+    add_task("Media vencida", priority="media", due_date="2000-01-01", db_path=db_path)
+    add_task("Alta futura", priority="alta", due_date="2999-01-01", db_path=db_path)
+
+    filtered = list_tasks(db_path=db_path, priority_filter="alta", overdue_only=True)
+    assert [t.description for t in filtered] == ["Alta vencida"]

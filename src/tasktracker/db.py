@@ -176,6 +176,7 @@ def list_tasks(
     tag_filter: Optional[str] = None,
     db_path: Path = DB_PATH,
     overdue_only: bool = False,
+    priority_filter: Optional[str] = None,
 ) -> list[Task]:
     conn = get_connection(db_path)
     try:
@@ -200,6 +201,9 @@ def list_tasks(
             params["tag_filter"] = normalize_tag(tag_filter)
         if overdue_only:
             query += " AND t.due_date IS NOT NULL AND t.due_date < :today AND t.done = 0"
+        if priority_filter:
+            query += " AND t.priority = :priority_filter"
+            params["priority_filter"] = priority_filter
         query += """
             GROUP BY t.id
             ORDER BY

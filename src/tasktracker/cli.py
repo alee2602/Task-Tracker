@@ -114,8 +114,13 @@ def list_cmd(
     tag: str = typer.Option(None, "--tag", help="Filter by tag"),
     tree: bool = typer.Option(False, "--tree", help="Show nested hierarchy (ignores --all/--tag)"),
     overdue: bool = typer.Option(False, "--overdue", help="Show only overdue, pending tasks"),
+    priority: str = typer.Option(None, "--priority", "-p", help=f"Filter by priority, one of {VALID_PRIORITIES}"),
 ):
     """List tasks."""
+    if priority is not None and priority not in VALID_PRIORITIES:
+        typer.secho(f"Invalid priority '{priority}'. Must be one of {VALID_PRIORITIES}.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
     if tree:
         tasks = list_tasks(include_done=True)
         if not tasks:
@@ -124,7 +129,7 @@ def list_cmd(
         _print_tree(tasks)
         return
 
-    tasks = list_tasks(include_done=all, tag_filter=tag, overdue_only=overdue)
+    tasks = list_tasks(include_done=all, tag_filter=tag, overdue_only=overdue, priority_filter=priority)
     if not tasks:
         typer.echo("No tasks found.")
         return

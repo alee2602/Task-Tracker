@@ -262,3 +262,57 @@ def test_deleting_last_pending_subtask_autocompletes_parent(tmp_path: Path):
 
     tasks = {t.id: t for t in list_tasks(include_done=True, db_path=db_path)}
     assert tasks[parent_id].done is True
+
+
+def test_add_task_with_due_date(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+
+    task_id = add_task("Pagar impuestos", db_path=db_path, due_date="2026-01-15")
+
+    tasks = {t.id: t for t in list_tasks(db_path=db_path)}
+    assert tasks[task_id].due_date == "2026-01-15"
+
+
+def test_task_without_due_date_has_none(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+
+    task_id = add_task("Sin fecha", db_path=db_path)
+
+    tasks = {t.id: t for t in list_tasks(db_path=db_path)}
+    assert tasks[task_id].due_date is None
+
+
+def test_list_orders_by_due_date_before_priority(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    add_task("Vence tarde", priority="alta", db_path=db_path, due_date="2026-12-01")
+    add_task("Vence pronto", priority="baja", db_path=db_path, due_date="2026-01-01")
+    add_task("Sin fecha", priority="alta", db_path=db_path)
+
+    ordered = [t.description for t in list_tasks(db_path=db_path)]
+    assert ordered == ["Vence pronto", "Vence tarde", "Sin fecha"]
+
+
+def test_overdue_only_filters_past_due_pending_tasks(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    overdue_id = add_task("Tarea vencida", db_path=db_path, due_date="2000-01-01")
+    add_task("Tarea futura", db_path=db_path, due_date="2999-01-01")
+    done_but_overdue = add_task("Vencida pero completa", db_path=db_path, due_date="2000-01-01")
+    mark_done(done_but_overdue, db_path)
+
+    overdue = list_tasks(db_path=db_path, overdue_only=True)
+    assert [t.id for t in overdue] == [overdue_id]
+
+
+def test_subtask_has_independent_due_date(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    parent_id = add_task("Organizar viaje", db_path=db_path, due_date="2026-06-01")
+    child_id = add_task("Comprar boletos", db_path=db_path, parent_id=parent_id, due_date="2026-05-01")
+
+    tasks = {t.id: t for t in list_tasks(db_path=db_path)}
+    assert tasks[parent_id].due_date == "2026-06-01"
+    assert tasks[child_id].due_date == "2026-05-01"

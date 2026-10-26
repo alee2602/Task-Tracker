@@ -29,6 +29,7 @@ class Task:
     created_at: str
     tags: list[str] = field(default_factory=list)
     parent_id: Optional[int] = None
+    due_date: Optional[str] = None
 
 
 def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
@@ -49,13 +50,16 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 priority TEXT NOT NULL CHECK(priority IN ('alta', 'media', 'baja')),
                 done INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
-                parent_id INTEGER REFERENCES tasks(id) ON DELETE RESTRICT
+                parent_id INTEGER REFERENCES tasks(id) ON DELETE RESTRICT,
+                due_date TEXT
             )
             """
         )
         existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
         if "parent_id" not in existing_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN parent_id INTEGER REFERENCES tasks(id) ON DELETE RESTRICT")
+        if "due_date" not in existing_columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN due_date TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tags (
@@ -136,6 +140,7 @@ def add_task(
     tags: Optional[list[str]] = None,
     db_path: Path = DB_PATH,
     parent_id: Optional[int] = None,
+    due_date: Optional[str] = None,
 ) -> int:
     if priority not in VALID_PRIORITIES:
         raise ValueError(f"Invalid priority '{priority}'. Must be one of {VALID_PRIORITIES}.")
@@ -146,8 +151,11 @@ def add_task(
             if not parent_exists:
                 raise ValueError(f"Parent task {parent_id} does not exist.")
         cursor = conn.execute(
-            "INSERT INTO tasks (description, priority, done, created_at, parent_id) VALUES (?, ?, 0, ?, ?)",
-            (description, priority, datetime.now(timezone.utc).isoformat(), parent_id),
+            """
+            INSERT INTO tasks (description, priority, done, created_at, parent_id, due_date)
+            VALUES (?, ?, 0, ?, ?, ?)
+            """,
+            (description, priority, datetime.now(timezone.utc).isoformat(), parent_id, due_date),
         )
         task_id = cursor.lastrowid
         for tag_name in tags or []:
@@ -167,6 +175,7 @@ def list_tasks(
     include_done: bool = False,
     tag_filter: Optional[str] = None,
     db_path: Path = DB_PATH,
+    overdue_only: bool = False,
 ) -> list[Task]:
     conn = get_connection(db_path)
     try:
@@ -177,7 +186,7 @@ def list_tasks(
             LEFT JOIN tags tg ON tg.id = tt.tag_id
             WHERE 1 = 1
         """
-        params: dict = {}
+        params: dict = {"today": datetime.now(timezone.utc).strftime("%Y-%m-%d")}
         if not include_done:
             query += " AND t.done = 0"
         if tag_filter:
@@ -189,9 +198,15 @@ def list_tasks(
                 )
             """
             params["tag_filter"] = normalize_tag(tag_filter)
+        if overdue_only:
+            query += " AND t.due_date IS NOT NULL AND t.due_date < :today AND t.done = 0"
         query += """
             GROUP BY t.id
-            ORDER BY CASE t.priority WHEN 'alta' THEN 0 WHEN 'media' THEN 1 ELSE 2 END, t.id
+            ORDER BY
+                CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END,
+                t.due_date ASC,
+                CASE t.priority WHEN 'alta' THEN 0 WHEN 'media' THEN 1 ELSE 2 END,
+                t.id
         """
         rows = conn.execute(query, params).fetchall()
         return [
@@ -203,6 +218,7 @@ def list_tasks(
                 created_at=row["created_at"],
                 tags=sorted(row["tags"].split(",")) if row["tags"] else [],
                 parent_id=row["parent_id"],
+                due_date=row["due_date"],
             )
             for row in rows
         ]
